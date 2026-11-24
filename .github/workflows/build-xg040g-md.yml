@@ -151,11 +151,6 @@ on:
           - none
           - release
           - prerelease
-      release_notes:
-        description: 'Release Notes'
-        required: false
-        default: ''
-        type: string
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -449,11 +444,9 @@ jobs:
       - name: Build release body
         if: inputs.release_type != 'none'
         id: release_body
-        env:
-          RELEASE_NOTES: ${{ inputs.release_notes }}
         run: |
           {
-            printf '%s\n' "$RELEASE_NOTES"
+            echo "XG-040G-MD (UBI) 自动构建产物"
             echo ""
             echo "---"
             echo ""

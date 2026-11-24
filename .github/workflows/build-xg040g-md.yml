@@ -1,0 +1,495 @@
+name: Build XG-040G-MD (UBI)
+
+# XG-040G-MD（Nokia，UBI 布局）专用编译工作流。
+# 基础配置固定为仓库根目录的 040.config（= CONFIG_TARGET_PROFILE DEVICE_nokia_xg-040g-md-ubi），
+# 插件可在 workflow_dispatch 面板上直接点选，无需改文件。
+#
+# plugin_mode:
+#   full   —— 原样使用 040.config（自带 passwall+openclash+lucky+pushbot+zerotier+udpxy+msd_lite 等）
+#   custom —— 先剥离 040.config 里的可选插件，再按下方勾选项重新组合
+# 两种模式都会追加 extra_packages / 移除 remove_packages。
+
+on:
+  workflow_dispatch:
+    inputs:
+      plugin_mode:
+        description: '插件方案 full=原样使用 040.config / custom=按下方勾选组合'
+        required: true
+        default: full
+        type: choice
+        options:
+          - full
+          - custom
+
+      proxy_passwall:
+        description: '[custom] 代理：PassWall'
+        required: false
+        default: true
+        type: boolean
+      proxy_openclash:
+        description: '[custom] 代理：OpenClash'
+        required: false
+        default: false
+        type: boolean
+      proxy_ssrplus:
+        description: '[custom] 代理：SSR-Plus'
+        required: false
+        default: false
+        type: boolean
+
+      samba4:
+        description: '[custom] 文件共享：Samba4'
+        required: false
+        default: false
+        type: boolean
+      aria2:
+        description: '[custom] 下载：Aria2'
+        required: false
+        default: false
+        type: boolean
+      transmission:
+        description: '[custom] 下载：Transmission'
+        required: false
+        default: false
+        type: boolean
+      docker:
+        description: '[custom] Docker + Dockerman'
+        required: false
+        default: false
+        type: boolean
+
+      zerotier:
+        description: '[custom] 内网穿透：ZeroTier'
+        required: false
+        default: true
+        type: boolean
+      tailscale:
+        description: '[custom] 内网穿透：Tailscale'
+        required: false
+        default: false
+        type: boolean
+      easytier:
+        description: '[custom] 内网穿透：EasyTier'
+        required: false
+        default: false
+        type: boolean
+      frpc:
+        description: '[custom] 内网穿透：Frp 客户端'
+        required: false
+        default: false
+        type: boolean
+
+      lucky:
+        description: '[custom] 工具：Lucky（DDNS/反代）'
+        required: false
+        default: false
+        type: boolean
+      pushbot:
+        description: '[custom] 工具：PushBot 推送'
+        required: false
+        default: false
+        type: boolean
+      ttyd:
+        description: '[custom] 工具：TTYD 网页终端'
+        required: false
+        default: false
+        type: boolean
+      ddns_go:
+        description: '[custom] 工具：DDNS-Go'
+        required: false
+        default: false
+        type: boolean
+      kms:
+        description: '[custom] 工具：vlmcsd KMS'
+        required: false
+        default: false
+        type: boolean
+      wol:
+        description: '[custom] 工具：网络唤醒 WOL'
+        required: false
+        default: false
+        type: boolean
+
+      upnp:
+        description: '[custom] 网络：UPnP'
+        required: false
+        default: false
+        type: boolean
+      sqm:
+        description: '[custom] 网络：SQM 智能限速'
+        required: false
+        default: false
+        type: boolean
+      nlbwmon:
+        description: '[custom] 网络：NLBWMon 流量统计'
+        required: false
+        default: false
+        type: boolean
+      udpxy:
+        description: '[custom] IPTV：udpxy + msd_lite'
+        required: false
+        default: false
+        type: boolean
+
+      extra_packages:
+        description: '额外软件包（空格分隔，例如 luci-app-alist adguardhome），两种模式都生效'
+        required: false
+        default: ''
+        type: string
+      remove_packages:
+        description: '要剔除的软件包（空格分隔），两种模式都生效'
+        required: false
+        default: ''
+        type: string
+
+      release_type:
+        description: 'Release Type'
+        required: true
+        default: 'none'
+        type: choice
+        options:
+          - none
+          - release
+          - prerelease
+      release_notes:
+        description: 'Release Notes'
+        required: false
+        default: ''
+        type: string
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Generate build version
+        id: version
+        run: |
+          git remote add upstream https://github.com/immortalwrt/immortalwrt.git 2>/dev/null || true
+          git remote set-url upstream https://github.com/immortalwrt/immortalwrt.git
+          git fetch --no-tags upstream master
+
+          build_date=$(TZ=Asia/Shanghai date +'%Y%m%d')
+          repo_commit_full=$(git rev-parse HEAD)
+          repo_commit=$(git rev-parse --short=8 HEAD)
+          upstream_base=$(git merge-base HEAD upstream/master)
+          upstream_commit=$(git rev-parse --short=8 "$upstream_base")
+          build_id="${build_date}-${repo_commit}-${upstream_commit}"
+          version_number="${build_date}-${repo_commit}"
+
+          echo "date=$build_date" >> $GITHUB_OUTPUT
+          echo "build_id=$build_id" >> $GITHUB_OUTPUT
+          echo "repo_commit=$repo_commit" >> $GITHUB_OUTPUT
+          echo "repo_commit_full=$repo_commit_full" >> $GITHUB_OUTPUT
+          echo "upstream_commit=$upstream_commit" >> $GITHUB_OUTPUT
+          echo "version_number=$version_number" >> $GITHUB_OUTPUT
+          echo "version_code=$build_id" >> $GITHUB_OUTPUT
+          echo "device_model=XG-040G-MD" >> $GITHUB_OUTPUT
+          echo "Build version: ImmortalWrt-for-Gemtek-brightspeed XG-040G-MD (UBI) $version_number"
+
+      - name: Setup build environment
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential clang gcc g++ binutils bzip2 gawk gettext git libncurses-dev libssl-dev python3 python3-setuptools rsync unzip wget xsltproc zlib1g-dev file which perl sed make
+
+      - name: Install feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          bash scripts/fix-stale-golang-host.sh
+
+      - name: Select feed providers
+        run: FEED_PATCHES_STRICT=1 bash scripts/select-feed-providers.sh
+
+      - name: Apply feed patches
+        run: FEED_PATCHES_STRICT=1 bash scripts/apply-feed-patches.sh
+
+      # 在 make defconfig 之前写入插件选择，避免版本字段被 defconfig 覆盖。
+      - name: Apply plugin selection
+        shell: bash
+        env:
+          PLUGIN_MODE: ${{ inputs.plugin_mode }}
+          PROXY_PASSWALL: ${{ inputs.proxy_passwall }}
+          PROXY_OPENCLASH: ${{ inputs.proxy_openclash }}
+          PROXY_SSRPLUS: ${{ inputs.proxy_ssrplus }}
+          EXTRA_SAMBA4: ${{ inputs.samba4 }}
+          EXTRA_ARIA2: ${{ inputs.aria2 }}
+          EXTRA_TRANSMISSION: ${{ inputs.transmission }}
+          EXTRA_DOCKER: ${{ inputs.docker }}
+          EXTRA_ZEROTIER: ${{ inputs.zerotier }}
+          EXTRA_TAILSCALE: ${{ inputs.tailscale }}
+          EXTRA_EASYTIER: ${{ inputs.easytier }}
+          EXTRA_FRPC: ${{ inputs.frpc }}
+          EXTRA_LUCKY: ${{ inputs.lucky }}
+          EXTRA_PUSHBOT: ${{ inputs.pushbot }}
+          EXTRA_TTYD: ${{ inputs.ttyd }}
+          EXTRA_DDNS_GO: ${{ inputs.ddns_go }}
+          EXTRA_KMS: ${{ inputs.kms }}
+          EXTRA_WOL: ${{ inputs.wol }}
+          EXTRA_UPNP: ${{ inputs.upnp }}
+          EXTRA_SQM: ${{ inputs.sqm }}
+          EXTRA_NLBWMON: ${{ inputs.nlbwmon }}
+          EXTRA_UDPXY: ${{ inputs.udpxy }}
+          EXTRA_PACKAGES: ${{ inputs.extra_packages }}
+          REMOVE_PACKAGES: ${{ inputs.remove_packages }}
+        run: |
+          set -euo pipefail
+
+          CONFIG=.config
+          cp 040.config "$CONFIG"
+
+          # 缺省值，便于本地直接调用本段脚本
+          : "${PLUGIN_MODE:=full}"
+          for v in PROXY_PASSWALL PROXY_OPENCLASH PROXY_SSRPLUS \
+                   EXTRA_SAMBA4 EXTRA_ARIA2 EXTRA_TRANSMISSION EXTRA_DOCKER \
+                   EXTRA_ZEROTIER EXTRA_TAILSCALE EXTRA_EASYTIER EXTRA_FRPC \
+                   EXTRA_LUCKY EXTRA_PUSHBOT EXTRA_TTYD EXTRA_DDNS_GO \
+                   EXTRA_KMS EXTRA_WOL EXTRA_UPNP EXTRA_SQM \
+                   EXTRA_NLBWMON EXTRA_UDPXY; do
+            eval ": \"\${$v:=false}\""
+          done
+          : "${EXTRA_PACKAGES:=}"
+          : "${REMOVE_PACKAGES:=}"
+
+          add_pkg() {
+            local p
+            for p in "$@"; do
+              [ -n "$p" ] || continue
+              sed -i "/^# CONFIG_PACKAGE_${p} is not set$/d" "$CONFIG"
+              grep -qxF "CONFIG_PACKAGE_${p}=y" "$CONFIG" || printf 'CONFIG_PACKAGE_%s=y\n' "$p" >> "$CONFIG"
+            done
+          }
+
+          del_pkg() {
+            local p
+            for p in "$@"; do
+              [ -n "$p" ] || continue
+              sed -i "/^CONFIG_PACKAGE_${p}=y$/d" "$CONFIG"
+              grep -qxF "# CONFIG_PACKAGE_${p} is not set" "$CONFIG" || printf '# CONFIG_PACKAGE_%s is not set\n' "$p" >> "$CONFIG"
+            done
+          }
+
+          # custom 模式先剥离 040.config 自带的全部可选插件，再按勾选重建。
+          if [ "$PLUGIN_MODE" = "custom" ]; then
+            del_pkg \
+              luci-app-passwall luci-app-openclash luci-app-ssr-plus \
+              luci-app-lucky luci-app-pushbot luci-app-zerotier \
+              luci-app-udpxy luci-app-msd_lite luci-app-upnp \
+              luci-app-vlmcsd luci-app-wol luci-app-timewol \
+              luci-app-ddns-go luci-app-ttyd luci-app-arpbind \
+              luci-app-pbr luci-app-clients luci-app-watchcat \
+              luci-app-samba4 luci-app-aria2 luci-app-transmission \
+              luci-app-dockerman luci-app-tailscale luci-app-easytier \
+              luci-app-frpc luci-app-smartdns luci-app-nlbwmon \
+              luci-app-adguardhome luci-app-sqm luci-app-mosdns
+            # 父包被剥离后，清掉 passwall/openclash/ssr-plus 的 INCLUDE_* 子选项残留
+            sed -i -E '/^CONFIG_PACKAGE_(luci-app-passwall|luci-app-openclash|luci-app-ssr-plus)_/d' "$CONFIG"
+          fi
+
+          if [ "$PROXY_PASSWALL" = "true" ]; then add_pkg luci-app-passwall; fi
+          if [ "$PROXY_OPENCLASH" = "true" ]; then add_pkg luci-app-openclash; fi
+          if [ "$PROXY_SSRPLUS" = "true" ]; then add_pkg luci-app-ssr-plus; fi
+
+          if [ "$EXTRA_SAMBA4" = "true" ]; then add_pkg luci-app-samba4 samba4-server kmod-usb-storage block-mount; fi
+          if [ "$EXTRA_ARIA2" = "true" ]; then add_pkg luci-app-aria2 aria2; fi
+          if [ "$EXTRA_TRANSMISSION" = "true" ]; then add_pkg luci-app-transmission transmission-daemon; fi
+          if [ "$EXTRA_DOCKER" = "true" ]; then add_pkg docker dockerd luci-app-dockerman; fi
+
+          if [ "$EXTRA_ZEROTIER" = "true" ]; then add_pkg luci-app-zerotier zerotier; fi
+          if [ "$EXTRA_TAILSCALE" = "true" ]; then add_pkg luci-app-tailscale tailscale; fi
+          if [ "$EXTRA_EASYTIER" = "true" ]; then add_pkg luci-app-easytier; fi
+          if [ "$EXTRA_FRPC" = "true" ]; then add_pkg luci-app-frpc frpc; fi
+
+          if [ "$EXTRA_LUCKY" = "true" ]; then add_pkg luci-app-lucky; fi
+          if [ "$EXTRA_PUSHBOT" = "true" ]; then add_pkg luci-app-pushbot; fi
+          if [ "$EXTRA_TTYD" = "true" ]; then add_pkg luci-app-ttyd ttyd; fi
+          if [ "$EXTRA_DDNS_GO" = "true" ]; then add_pkg luci-app-ddns-go; fi
+          if [ "$EXTRA_KMS" = "true" ]; then add_pkg luci-app-vlmcsd vlmcsd; fi
+          if [ "$EXTRA_WOL" = "true" ]; then add_pkg luci-app-wol; fi
+
+          if [ "$EXTRA_UPNP" = "true" ]; then add_pkg luci-app-upnp miniupnpd; fi
+          if [ "$EXTRA_SQM" = "true" ]; then add_pkg luci-app-sqm sqm-scripts; fi
+          if [ "$EXTRA_NLBWMON" = "true" ]; then add_pkg luci-app-nlbwmon nlbwmon; fi
+          if [ "$EXTRA_UDPXY" = "true" ]; then add_pkg luci-app-udpxy udpxy luci-app-msd_lite msd_lite; fi
+
+          # 自由追加 / 剔除
+          if [ -n "${EXTRA_PACKAGES:-}" ]; then add_pkg $EXTRA_PACKAGES; fi
+          if [ -n "${REMOVE_PACKAGES:-}" ]; then del_pkg $REMOVE_PACKAGES; fi
+
+          echo "插件方案：$PLUGIN_MODE"
+
+      - name: Configure
+        run: |
+          # defconfig 补齐依赖，并按 040.config 的 DEVICE_nokia_xg-040g-md-ubi 解析设备。
+          make defconfig
+
+          BUILD_DATE='${{ steps.version.outputs.date }}' \
+          BUILD_ID='${{ steps.version.outputs.build_id }}' \
+          REPO_COMMIT='${{ steps.version.outputs.repo_commit }}' \
+          UPSTREAM_COMMIT='${{ steps.version.outputs.upstream_commit }}' \
+          VERSION_CODE='${{ steps.version.outputs.version_code }}' \
+          bash scripts/set-build-version.sh .config
+
+          bash scripts/check-distfeeds.sh
+          bash scripts/check-gemtek-profile-isolation.sh --config .config
+          grep -q '^CONFIG_TARGET_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y' .config
+          grep -q '^CONFIG_VERSION_PRODUCT="XG-040G-MD"' .config
+          grep -E 'CONFIG_(TARGET_PROFILE|VERSION_DIST|VERSION_PRODUCT|VERSION_NUMBER|VERSION_CODE)[= ]' .config
+
+      - name: Report plugin result
+        shell: bash
+        run: |
+          {
+            echo "### 已启用的 LuCI 应用"
+            echo '```'
+            grep -E '^CONFIG_PACKAGE_luci-app-[A-Za-z0-9_.+-]+=y$' .config | sed 's/^CONFIG_PACKAGE_//;s/=y//' | sort || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify libffi build dependency
+        run: |
+          test -f package/libs/libffi/Makefile
+          awk '
+            /^Source-Makefile:/ { in_libffi = ($2 == "package/libs/libffi/Makefile") }
+            in_libffi && /^Package: libffi$/ { have_package = 1 }
+            in_libffi && /^Build-Types:/ {
+              for (i = 2; i <= NF; i++) if ($i == "host") have_host = 1
+            }
+            END {
+              if (!have_package || !have_host) {
+                print "libffi package with host build support is missing from package metadata" > "/dev/stderr"
+                exit 1
+              }
+            }
+          ' tmp/.packageinfo
+
+      - name: Download sources
+        shell: bash
+        run: |
+          make download -j$(nproc) BUILD_LOG=1 2>&1 | tee download.log
+
+      - name: Build Firmware
+        shell: bash
+        run: |
+          make -j2 world BUILD_LOG=1 2>&1 | tee build.log
+
+      - name: Verbose retry on build failure
+        if: failure()
+        shell: bash
+        run: |
+          bash scripts/summarize-build-errors.sh build.log || true
+          failed_pkg=$(grep 'ERROR:.*failed to build' build.log | head -1 | sed 's/.*ERROR: \(.*\) failed to build.*/\1/' || true)
+          if [ -n "$failed_pkg" ]; then
+            echo "=== Rebuilding $failed_pkg with V=s ==="
+            retry_status=0
+            make "${failed_pkg}/compile" BUILD_LOG=1 V=s -j1 2>&1 | tee build-verbose.log || retry_status=$?
+            echo "=== First errors in build-verbose.log ==="
+            grep -nE "error:|Error [0-9]|FAILED|Patch failed|No rule to make target" build-verbose.log | head -40 || true
+            echo "=== tail of build-verbose.log ==="
+            tail -80 build-verbose.log || true
+            exit "$retry_status"
+          else
+            echo "No failing package found in build.log" >&2
+            tail -150 build.log || true
+          fi
+
+      - name: Verify device isolation
+        shell: bash
+        run: |
+          bash scripts/check-firmware-artifacts.sh \
+            --config .config \
+            --directory bin/targets/airoha/an7581
+          kernel_config=$(find build_dir/target-aarch64_cortex-a53_musl/linux-airoha_an7581 -path '*/linux-*/.config' -print -quit)
+          manifest=$(find bin/targets/airoha/an7581 -maxdepth 1 -type f -name '*manifest' -print -quit)
+          test -n "$kernel_config"
+          test -n "$manifest"
+          bash scripts/check-gemtek-profile-isolation.sh \
+            --config .config \
+            --kernel-config "$kernel_config" \
+            --manifest "$manifest"
+
+      - name: Check build status
+        if: always()
+        run: |
+          if [ -f build.log ]; then
+            bash scripts/summarize-build-errors.sh build.log || true
+            tail -100 build.log
+          fi
+          echo "=== bin/targets/airoha/an7581/ ==="
+          ls -la bin/targets/airoha/an7581/ 2>/dev/null || echo "No files found in an7581 directory"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: xg-040g-md-${{ inputs.plugin_mode }}-firmware
+          path: |
+            download.log
+            build.log
+            build-verbose.log
+            logs/
+            bin/targets/airoha/an7581/*.itb
+            bin/targets/airoha/an7581/*manifest
+            bin/targets/airoha/an7581/config.buildinfo
+            bin/targets/airoha/an7581/feeds.buildinfo
+            bin/targets/airoha/an7581/version.buildinfo
+            bin/targets/airoha/an7581/sha256sums
+          retention-days: 30
+        if: always()
+
+      - name: Build release body
+        if: inputs.release_type != 'none'
+        id: release_body
+        env:
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          {
+            printf '%s\n' "$RELEASE_NOTES"
+            echo ""
+            echo "---"
+            echo ""
+            echo "如果您觉得对您有帮助，请我喝杯咖啡吧，让我更有动力持续更新。"
+            echo ""
+            echo '<img width="400" height="400" alt="c6ea388c976395326514814f80d512d5" src="https://github.com/user-attachments/assets/0ac90d58-ac73-4dc1-b926-276e539e5d0f" />'
+          } > /tmp/release_body.md
+          {
+            echo "body<<EOF"
+            cat /tmp/release_body.md
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Verify release tag
+        if: inputs.release_type != 'none'
+        env:
+          RELEASE_TAG: ${{ format('{0}-{1}', steps.version.outputs.date, steps.version.outputs.repo_commit) }}
+          BUILD_COMMIT: ${{ steps.version.outputs.repo_commit_full }}
+        run: bash scripts/check-release-tag.sh "$RELEASE_TAG" "$BUILD_COMMIT"
+
+      - name: Create Release
+        if: inputs.release_type != 'none'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ format('{0}-{1}', steps.version.outputs.date, steps.version.outputs.repo_commit) }}
+          target_commitish: ${{ steps.version.outputs.repo_commit_full }}
+          name: ${{ format('{0} - XG-040G-MD (UBI) Build ({1})', steps.version.outputs.date, steps.version.outputs.repo_commit) }}
+          body: ${{ steps.release_body.outputs.body }}
+          draft: false
+          prerelease: ${{ inputs.release_type == 'prerelease' }}
+          files: |
+            bin/targets/airoha/an7581/*.itb
+            bin/targets/airoha/an7581/*manifest
+            bin/targets/airoha/an7581/config.buildinfo
+            bin/targets/airoha/an7581/feeds.buildinfo
+            bin/targets/airoha/an7581/version.buildinfo
+            bin/targets/airoha/an7581/sha256sums
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
